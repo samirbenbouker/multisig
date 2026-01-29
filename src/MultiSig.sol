@@ -10,14 +10,18 @@ contract MultiSig is ReentrancyGuard {
     // -------------------------
     error MultiSig__OwnerAddressCanNotBeZero();
     error MultiSig__OwnersAddressCanNotBeTheSame();
-    error MultiSig__ThresholdCanNotBeZero();
-    error MultiSig__EmptyTransaction();
-    error MultiSig__AddressToCanNotBeZero();
-    error MultiSig__TransactionIdCanNotBeZero();
+    error MultiSig__OwnersCanNotBeEmpty();
     error MultiSig__YouAreNotOwner();
-    error MultiSig__AlreadyVoted();
-    error MultiSig__AlreadyExecuted();
+    error MultiSig__ThresholdCanNotBeZero();
+    error MultiSig__ThresholdExceedsOwners();
+    error MultiSig__TransactionIdCanNotBeZero();
+    error MultiSig__TransactionNotExist();
     error MultiSig__TransactionFailed();
+    error MultiSig__AlreadyVoted();
+    error MultiSig__AlreadyExecutedOrRevoked();
+    error MultiSig__AddressToCanNotBeZero();
+    error MultiSig__EmptyTransaction();
+    error MultiSig__NotEnoughApprovals();
 
     // -------------------------
     // ENUMS
@@ -37,6 +41,7 @@ contract MultiSig is ReentrancyGuard {
         bytes data;
         bool executed;
         uint256 numConfirmations;
+        bool revoked;
         uint256 numRevokes;
         uint256 createdAt;
         uint256 endAt;
@@ -57,7 +62,8 @@ contract MultiSig is ReentrancyGuard {
     event Submit(uint256 indexed txId, address indexed to, uint256 indexed value, bytes data);
     event Confirm(uint256 indexed txId, address indexed owner);
     event Revoke(uint256 indexed txId, address indexed owner);
-    event Execute(address indexed owner, uint256 indexed txId);
+    event ExecuteConfirmed(address indexed owner, uint256 indexed txId);
+    event ExecuteRevoked(address indexed owner, uint256 indexed txId);
 
     // -------------------------
     // MODIFIERS
@@ -68,8 +74,8 @@ contract MultiSig is ReentrancyGuard {
     }
 
     constructor(address[] memory _owners, uint256 _threshold) {
+        _validateThreshold(_threshold, _owners);
         _validateOwner(_owners);
-        _validateThreshold(_threshold);
 
         s_owners = _owners;
         i_threshold = _threshold;
@@ -81,7 +87,7 @@ contract MultiSig is ReentrancyGuard {
     // -------------------------
     // EXTERNAL FUNCTIONS
     // -------------------------
-    function submit(address _to, uint256 _value, bytes memory _data) external {
+    function submit(address _to, uint256 _value, bytes memory _data) external onlyOwners(msg.sender) {
         if (_value == 0 && _data.length == 0) {
             revert MultiSig__EmptyTransaction();
         }
@@ -98,6 +104,7 @@ contract MultiSig is ReentrancyGuard {
             data: _data,
             executed: false,
             numConfirmations: 0,
+            revoked: false,
             numRevokes: 0,
             createdAt: block.timestamp,
             endAt: 0
@@ -125,18 +132,26 @@ contract MultiSig is ReentrancyGuard {
     function execute(uint256 _txId) external onlyOwners(msg.sender) nonReentrant {
         _checkTransactionId(_txId);
 
-        Transaction storage transaction = s_txs[_txId];
-        transaction.executed = true;
-        transaction.endAt = block.timestamp;
+        Transaction storage transaction = _checkTransactionExecuted(_txId);
 
         if (transaction.numConfirmations >= i_threshold) {
-            (bool success, ) = payable(msg.sender).call{value: transaction.value}(transaction.data);
-            if(!success) {
+            transaction.executed = true;
+            transaction.endAt = block.timestamp;
+
+            (bool success,) = payable(transaction.to).call{value: transaction.value}(transaction.data);
+            if (!success) {
                 revert MultiSig__TransactionFailed();
             }
-        } 
-        
-        emit Execute(msg.sender, _txId);
+
+            emit ExecuteConfirmed(msg.sender, _txId);
+        } else if (transaction.numRevokes >= i_threshold) {
+            transaction.revoked = true;
+            transaction.endAt = block.timestamp;
+
+            emit ExecuteRevoked(msg.sender, _txId);
+        } else {
+            revert MultiSig__NotEnoughApprovals();
+        }
     }
 
     // -------------------------
@@ -144,9 +159,12 @@ contract MultiSig is ReentrancyGuard {
     // -------------------------
     function _validateOwner(address[] memory owners) internal pure {
         uint256 length = owners.length;
-        for (uint256 i = 0; i < length - 1; i++) {
+
+        for (uint256 i = 0; i < length; i++) {
+            if (owners[i] == address(0)) revert MultiSig__OwnerAddressCanNotBeZero();
+
             for (uint256 j = i + 1; j < length; j++) {
-                if (owners[i] == address(0)) {
+                if (owners[j] == address(0)) {
                     revert MultiSig__OwnerAddressCanNotBeZero();
                 }
 
@@ -157,9 +175,17 @@ contract MultiSig is ReentrancyGuard {
         }
     }
 
-    function _validateThreshold(uint256 threshold) internal pure {
+    function _validateThreshold(uint256 threshold, address[] memory owners) internal pure {
         if (threshold == 0) {
             revert MultiSig__ThresholdCanNotBeZero();
+        }
+
+        if (owners.length == 0) {
+            revert MultiSig__OwnersCanNotBeEmpty();
+        }
+
+        if (threshold > owners.length) {
+            revert MultiSig__ThresholdExceedsOwners();
         }
     }
 
@@ -180,9 +206,13 @@ contract MultiSig is ReentrancyGuard {
         return false;
     }
 
-    function _checkTransactionId(uint256 txId) internal pure {
+    function _checkTransactionId(uint256 txId) internal view {
         if (txId == 0) {
             revert MultiSig__TransactionIdCanNotBeZero();
+        }
+
+        if (txId > s_txId) {
+            revert MultiSig__TransactionNotExist();
         }
     }
 
@@ -194,8 +224,8 @@ contract MultiSig is ReentrancyGuard {
 
     function _checkTransactionExecuted(uint256 txId) internal view returns (Transaction storage) {
         Transaction storage transaction = s_txs[txId];
-        if (!transaction.executed) {
-            revert MultiSig__AlreadyExecuted();
+        if (transaction.executed || transaction.revoked) {
+            revert MultiSig__AlreadyExecutedOrRevoked();
         }
 
         return transaction;
@@ -216,8 +246,8 @@ contract MultiSig is ReentrancyGuard {
 
     function getIfIsOwner(address owner) external view returns (bool) {
         uint256 length = s_owners.length;
-        for(uint256 i = 0; i < length; i++) {
-            if(owner == s_owners[i]) {
+        for (uint256 i = 0; i < length; i++) {
+            if (owner == s_owners[i]) {
                 return true;
             }
         }
@@ -240,5 +270,4 @@ contract MultiSig is ReentrancyGuard {
     function getResponsesByOwnerAndTxId(uint256 _txId, address _owner) external view returns (Status) {
         return s_responses[_txId][_owner];
     }
-
 }
