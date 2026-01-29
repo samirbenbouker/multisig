@@ -15,6 +15,7 @@ contract MultiSig {
     error MultiSig__YouAreNotOwner();
     error MultiSig__AlreadyVoted();
     error MultiSig__AlreadyExecuted();
+    error MultiSig__TransactionFailed();
 
     // -------------------------
     // ENUMS
@@ -31,11 +32,12 @@ contract MultiSig {
     struct Transaction {
         address to;
         uint256 value;
-        bytes32 data;
+        bytes data;
         bool executed;
         uint256 numConfirmations;
         uint256 numRevokes;
         uint256 createdAt;
+        uint256 endAt;
     }
 
     // -------------------------
@@ -50,9 +52,10 @@ contract MultiSig {
     // -------------------------
     // EVENTS
     // -------------------------
-    event Submit(uint256 indexed txId, address indexed to, uint256 indexed value, bytes32 data);
+    event Submit(uint256 indexed txId, address indexed to, uint256 indexed value, bytes data);
     event Confirm(uint256 indexed txId, address indexed owner);
     event Revoke(uint256 indexed txId, address indexed owner);
+    event Execute(address indexed owner, uint256 indexed txId);
 
     // -------------------------
     // MODIFIERS
@@ -76,12 +79,12 @@ contract MultiSig {
     // -------------------------
     // EXTERNAL FUNCTIONS
     // -------------------------
-    function submit(address _to, uint256 _value, bytes32 _data) external {
-        if(_value == 0 && _data == 0) {
+    function submit(address _to, uint256 _value, bytes memory _data) external {
+        if (_value == 0 && _data.length == 0) {
             revert MultiSig__EmptyTransaction();
         }
 
-        if(_to == address(0)) {
+        if (_to == address(0)) {
             revert MultiSig__AddressToCanNotBeZero();
         }
 
@@ -94,14 +97,15 @@ contract MultiSig {
             executed: false,
             numConfirmations: 0,
             numRevokes: 0,
-            createdAt: block.timestamp
+            createdAt: block.timestamp,
+            endAt: 0
         });
 
         emit Submit(s_txId, _to, _value, _data);
     }
 
     function confirm(uint256 _txId) external onlyOwners(msg.sender) {
-        Transaction storage transaction = _checkTransactionStatus(_txId);
+        Transaction storage transaction = _checkTransactionExecuted(_txId);
         transaction.numConfirmations++;
         s_responses[_txId][msg.sender] = Status.CONFIRM;
 
@@ -109,11 +113,28 @@ contract MultiSig {
     }
 
     function revoke(uint256 _txId) external onlyOwners(msg.sender) {
-        Transaction storage transaction = _checkTransactionStatus(_txId);
+        Transaction storage transaction = _checkTransactionExecuted(_txId);
         transaction.numRevokes++;
         s_responses[_txId][msg.sender] = Status.REVOKE;
 
         emit Revoke(_txId, msg.sender);
+    }
+
+    function execute(uint256 _txId) external onlyOwners(msg.sender) {
+        _checkTransactionId(_txId);
+
+        Transaction storage transaction = s_txs[_txId];
+        transaction.executed = true;
+        transaction.endAt = block.timestamp;
+
+        if (transaction.numConfirmations >= s_threshold) {
+            (bool success, ) = payable(msg.sender).call{value: transaction.value}(transaction.data);
+            if(!success) {
+                revert MultiSig__TransactionFailed();
+            }
+        } 
+        
+        emit Execute(msg.sender, _txId);
     }
 
     // -------------------------
@@ -141,15 +162,15 @@ contract MultiSig {
     }
 
     function _checkOwners(address sender) internal view {
-        if(!_onlyOwners(sender)) {
+        if (!_onlyOwners(sender)) {
             revert MultiSig__YouAreNotOwner();
         }
     }
 
     function _onlyOwners(address sender) internal view returns (bool) {
         uint256 length = s_owners.length;
-        for(uint256 i = 0; i < length; i++) {
-            if(s_owners[i] == sender) {
+        for (uint256 i = 0; i < length; i++) {
+            if (s_owners[i] == sender) {
                 return true;
             }
         }
@@ -157,20 +178,66 @@ contract MultiSig {
         return false;
     }
 
-    function _checkTransactionStatus(uint256 txId) internal view returns (Transaction storage) {
-        if(txId == 0) {
+    function _checkTransactionId(uint256 txId) internal pure {
+        if (txId == 0) {
             revert MultiSig__TransactionIdCanNotBeZero();
         }
+    }
 
-        if(s_responses[txId][msg.sender] != Status.NO_RESPONSE) {
+    function _checkTransactionStatus(uint256 txId) internal view {
+        if (s_responses[txId][msg.sender] != Status.NO_RESPONSE) {
             revert MultiSig__AlreadyVoted();
         }
+    }
+
+    function _checkTransaction(uint256 txId) internal view {
+        _checkTransactionId(txId);
+        _checkTransactionStatus(txId);
+    }
+
+    function _checkTransactionExecuted(uint256 txId) internal view returns (Transaction storage) {
+        _checkTransaction(txId);
 
         Transaction storage transaction = s_txs[txId];
-        if(transaction.executed != false) {
+        if (transaction.executed != false) {
             revert MultiSig__AlreadyExecuted();
         }
 
         return transaction;
     }
+
+    // -------------------------
+    // GET FUNCTIONS
+    // -------------------------
+    function getOwners() external view returns (address[] memory) {
+        return s_owners;
+    }
+
+    function getIfIsOwner(address owner) external view returns (bool) {
+        uint256 length = s_owners.length;
+        for(uint256 i = 0; i < length; i++) {
+            if(owner == s_owners[i]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function getThreshold() external view returns (uint256) {
+        return s_threshold;
+    }
+
+    function getCurrentTxId() external view returns (uint256) {
+        return s_txId;
+    }
+
+    function getTransactionByTxId(uint256 _txId) external view returns (Transaction memory) {
+        return s_txs[_txId];
+    }
+
+    function getResponsesByOwnerAndTxId(uint256 _txId, address _owner) external view returns (Status) {
+        return s_responses[_txId][_owner];
+    }
+
 }
