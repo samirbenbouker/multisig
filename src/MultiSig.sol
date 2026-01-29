@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 pragma solidity 0.8.30;
 
-contract MultiSig {
+contract MultiSig is ReentrancyGuard {
     // -------------------------
     // ERRORS
     // -------------------------
@@ -44,7 +46,7 @@ contract MultiSig {
     // STORAGE
     // -------------------------
     address[] private s_owners;
-    uint256 private s_threshold;
+    uint256 private immutable i_threshold;
     uint256 private s_txId;
     mapping(uint256 txId => Transaction transaction) private s_txs;
     mapping(uint256 txId => mapping(address owner => Status status)) private s_responses;
@@ -70,7 +72,7 @@ contract MultiSig {
         _validateThreshold(_threshold);
 
         s_owners = _owners;
-        s_threshold = _threshold;
+        i_threshold = _threshold;
         s_txId = 0;
     }
 
@@ -120,14 +122,14 @@ contract MultiSig {
         emit Revoke(_txId, msg.sender);
     }
 
-    function execute(uint256 _txId) external onlyOwners(msg.sender) {
+    function execute(uint256 _txId) external onlyOwners(msg.sender) nonReentrant {
         _checkTransactionId(_txId);
 
         Transaction storage transaction = s_txs[_txId];
         transaction.executed = true;
         transaction.endAt = block.timestamp;
 
-        if (transaction.numConfirmations >= s_threshold) {
+        if (transaction.numConfirmations >= i_threshold) {
             (bool success, ) = payable(msg.sender).call{value: transaction.value}(transaction.data);
             if(!success) {
                 revert MultiSig__TransactionFailed();
@@ -192,7 +194,7 @@ contract MultiSig {
 
     function _checkTransactionExecuted(uint256 txId) internal view returns (Transaction storage) {
         Transaction storage transaction = s_txs[txId];
-        if (transaction.executed != false) {
+        if (!transaction.executed) {
             revert MultiSig__AlreadyExecuted();
         }
 
@@ -224,7 +226,7 @@ contract MultiSig {
     }
 
     function getThreshold() external view returns (uint256) {
-        return s_threshold;
+        return i_threshold;
     }
 
     function getCurrentTxId() external view returns (uint256) {
