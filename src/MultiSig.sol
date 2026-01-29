@@ -105,7 +105,7 @@ contract MultiSig {
     }
 
     function confirm(uint256 _txId) external onlyOwners(msg.sender) {
-        Transaction storage transaction = _checkTransactionExecuted(_txId);
+        Transaction storage transaction = _checkTransaction(_txId);
         transaction.numConfirmations++;
         s_responses[_txId][msg.sender] = Status.CONFIRM;
 
@@ -113,7 +113,7 @@ contract MultiSig {
     }
 
     function revoke(uint256 _txId) external onlyOwners(msg.sender) {
-        Transaction storage transaction = _checkTransactionExecuted(_txId);
+        Transaction storage transaction = _checkTransaction(_txId);
         transaction.numRevokes++;
         s_responses[_txId][msg.sender] = Status.REVOKE;
 
@@ -190,20 +190,19 @@ contract MultiSig {
         }
     }
 
-    function _checkTransaction(uint256 txId) internal view {
-        _checkTransactionId(txId);
-        _checkTransactionStatus(txId);
-    }
-
     function _checkTransactionExecuted(uint256 txId) internal view returns (Transaction storage) {
-        _checkTransaction(txId);
-
         Transaction storage transaction = s_txs[txId];
         if (transaction.executed != false) {
             revert MultiSig__AlreadyExecuted();
         }
 
         return transaction;
+    }
+
+    function _checkTransaction(uint256 txId) internal view returns (Transaction storage) {
+        _checkTransactionId(txId);
+        _checkTransactionStatus(txId);
+        return _checkTransactionExecuted(txId);
     }
 
     // -------------------------
