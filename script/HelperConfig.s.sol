@@ -6,7 +6,6 @@ import {Script} from "forge-std/Script.sol";
 import {MultiSig} from "src/MultiSig.sol";
 
 contract HelperConfig is Script {
-
     address public bob = makeAddr("bob");
     address public alice = makeAddr("alice");
     address public pep = makeAddr("pep");
@@ -31,9 +30,8 @@ contract HelperConfig is Script {
 
     function addFoundToOwners() internal {
         owners = [bob, alice, pep];
-        for(uint256 i = 0; i < owners.length; i++) {
+        for (uint256 i = 0; i < owners.length; i++) {
             vm.deal(owners[i], INITIAL_AMOUNT);
         }
     }
-    
 }

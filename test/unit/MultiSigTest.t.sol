@@ -31,8 +31,26 @@ contract MultiSigTest is Test {
 
     modifier addFoundToWallet() {
         vm.prank(owners[ZERO]);
-        (bool success, ) = payable(address(wallet)).call{value: WALLET_FOUNDS}("");
+        (bool success,) = payable(address(wallet)).call{value: WALLET_FOUNDS}("");
         assert(success);
+        _;
+    }
+
+    modifier confirmTransaction(address owner, uint256 txId) {
+        vm.prank(owner);
+        wallet.confirm(txId);
+        _;
+    }
+
+    modifier revokeTransaction(address owner, uint256 txId) {
+        vm.prank(owner);
+        wallet.revoke(txId);
+        _;
+    }
+
+    modifier executeTransaction(uint256 txId) {
+        vm.prank(owners[ONE]);
+        wallet.execute(txId);
         _;
     }
 
@@ -108,10 +126,7 @@ contract MultiSigTest is Test {
     }
 
     /// success
-    function test__submit() public {
-        vm.prank(owners[TWO]);
-        wallet.submit(to, SUBMIT_VALUE, EMPTY_BYTES);
-
+    function test__submit() public submitTransaction {
         assertEq(wallet.getCurrentTxId(), ONE);
 
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
@@ -158,10 +173,7 @@ contract MultiSigTest is Test {
     }
 
     /// revert AlreadyVoted
-    function test__confirm__revertAlreadyVoted() public submitTransaction {
-        vm.prank(owners[ONE]);
-        wallet.confirm(ONE);
-
+    function test__confirm__revertAlreadyVoted() public submitTransaction confirmTransaction(owners[ONE], TX_ID) {
         vm.prank(owners[ONE]);
         vm.expectRevert(MultiSig.MultiSig__AlreadyVoted.selector);
         wallet.confirm(ONE);
@@ -171,16 +183,14 @@ contract MultiSigTest is Test {
     }
 
     /// revert AlreadyExecutedOrRevoked
-    function test__confirm__alreadyExectuedOrRevoked() public submitTransaction addFoundToWallet {
-        vm.prank(owners[ZERO]);
-        wallet.confirm(ONE);
-    
-        vm.prank(owners[ONE]);
-        wallet.confirm(ONE);
-
-        vm.prank(owners[TWO]);
-        wallet.execute(ONE);
-
+    function test__confirm__alreadyExectuedOrRevoked()
+        public
+        submitTransaction
+        addFoundToWallet
+        confirmTransaction(owners[ZERO], TX_ID)
+        confirmTransaction(owners[ONE], TX_ID)
+        executeTransaction(TX_ID)
+    {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.executed, true);
 
@@ -190,10 +200,7 @@ contract MultiSigTest is Test {
     }
 
     /// success
-    function test__confirm() public submitTransaction {
-        vm.prank(owners[ZERO]);
-        wallet.confirm(ONE);
-        
+    function test__confirm() public submitTransaction confirmTransaction(owners[ZERO], TX_ID) {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.numConfirmations, ONE);
     }
@@ -228,12 +235,9 @@ contract MultiSigTest is Test {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.numRevokes, ZERO);
     }
-    
-    /// revert AlreadyVoted
-    function test__revoke__revertAlreadyVoted() public submitTransaction {
-        vm.prank(owners[ZERO]);
-        wallet.revoke(TX_ID);
 
+    /// revert AlreadyVoted
+    function test__revoke__revertAlreadyVoted() public submitTransaction revokeTransaction(owners[ZERO], TX_ID) {
         vm.prank(owners[ZERO]);
         vm.expectRevert(MultiSig.MultiSig__AlreadyVoted.selector);
         wallet.revoke(TX_ID);
@@ -243,16 +247,14 @@ contract MultiSigTest is Test {
     }
 
     /// revert AlreadyExecutedOrRevoked
-    function test__revoke__alreadyExectuedOrRevoked() public submitTransaction addFoundToWallet {
-        vm.prank(owners[ZERO]);
-        wallet.revoke(TX_ID);
-    
-        vm.prank(owners[ONE]);
-        wallet.revoke(TX_ID);
-
-        vm.prank(owners[TWO]);
-        wallet.execute(TX_ID);
-
+    function test__revoke__alreadyExectuedOrRevoked()
+        public
+        submitTransaction
+        addFoundToWallet
+        revokeTransaction(owners[ZERO], TX_ID)
+        revokeTransaction(owners[ONE], TX_ID)
+        executeTransaction(TX_ID)
+    {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.revoked, true);
 
@@ -262,10 +264,7 @@ contract MultiSigTest is Test {
     }
 
     /// success
-    function test__revoke() public submitTransaction {
-        vm.prank(owners[ONE]);
-        wallet.revoke(TX_ID);
-
+    function test__revoke() public submitTransaction revokeTransaction(owners[ONE], TX_ID) {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.numRevokes, ONE);
     }
@@ -303,18 +302,15 @@ contract MultiSigTest is Test {
         assertEq(transaction.executed, false);
         assertEq(transaction.revoked, false);
     }
-    
+
     /// revert AlreadyExecutedOrRevoked
-    function test__execute__revertAlreadyExecutedOrRevoked() public submitTransaction {
-        vm.prank(owners[ZERO]);
-        wallet.revoke(TX_ID);
-
-        vm.prank(owners[ONE]);
-        wallet.revoke(TX_ID);
-
-        vm.prank(owners[ONE]);
-        wallet.execute(TX_ID);
-
+    function test__execute__revertAlreadyExecutedOrRevoked()
+        public
+        submitTransaction
+        revokeTransaction(owners[ZERO], TX_ID)
+        revokeTransaction(owners[ONE], TX_ID)
+        executeTransaction(TX_ID)
+    {
         MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
         assertEq(transaction.executed, false);
         assertEq(transaction.revoked, true);
@@ -325,10 +321,7 @@ contract MultiSigTest is Test {
     }
 
     /// revert NotEnoughApprovals
-    function test__execute__revertNotEnoughApprovals() public submitTransaction {
-        vm.prank(owners[ZERO]);
-        wallet.revoke(TX_ID);
-
+    function test__execute__revertNotEnoughApprovals() public submitTransaction revokeTransaction(owners[ZERO], TX_ID) {
         vm.prank(owners[ONE]);
         vm.expectRevert(MultiSig.MultiSig__NotEnoughApprovals.selector);
         wallet.execute(TX_ID);
@@ -339,16 +332,14 @@ contract MultiSigTest is Test {
     }
 
     /// success NumConfirmations >= threshold
-    function test__execute__executed() public submitTransaction addFoundToWallet {
-        vm.prank(owners[ZERO]);
-        wallet.confirm(TX_ID);
-
-        vm.prank(owners[TWO]);
-        wallet.confirm(TX_ID);
-
-        vm.prank(owners[ONE]);
-        wallet.execute(TX_ID);
-
+    function test__execute__executed()
+        public
+        submitTransaction
+        addFoundToWallet
+        confirmTransaction(owners[ZERO], TX_ID)
+        confirmTransaction(owners[ONE], TX_ID)
+        executeTransaction(TX_ID)
+    {
         assertEq(address(wallet).balance, WALLET_FOUNDS - SUBMIT_VALUE);
         assertEq(to.balance, SUBMIT_VALUE);
 
@@ -358,16 +349,14 @@ contract MultiSigTest is Test {
     }
 
     /// success numRevoks >= threshold
-    function test__execute__revoked() public submitTransaction addFoundToWallet {
-        vm.prank(owners[ZERO]);
-        wallet.revoke(TX_ID);
-
-        vm.prank(owners[TWO]);
-        wallet.revoke(TX_ID);
-
-        vm.prank(owners[ONE]);
-        wallet.execute(TX_ID);
-
+    function test__execute__revoked()
+        public
+        submitTransaction
+        addFoundToWallet
+        revokeTransaction(owners[ZERO], TX_ID)
+        revokeTransaction(owners[ONE], TX_ID)
+        executeTransaction(TX_ID)
+    {
         assertEq(address(wallet).balance, WALLET_FOUNDS);
         assertEq(to.balance, ZERO);
 
@@ -376,6 +365,5 @@ contract MultiSigTest is Test {
         assertEq(transaction.revoked, true);
     }
 
-    // getFunctions 
-
+    // getFunctions
 }
