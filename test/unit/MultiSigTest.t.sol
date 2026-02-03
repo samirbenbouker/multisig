@@ -366,4 +366,39 @@ contract MultiSigTest is Test {
     }
 
     // getFunctions
+    function test__getOwners() public view {
+        assertEq(wallet.getOwners(), owners);
+    }
+
+    function test__getIfIsOwner() public view {
+        assertEq(wallet.getIfIsOwner(owners[ZERO]), true);
+        assertEq(wallet.getIfIsOwner(ADDRESS_ZERO), false);
+    }
+
+    function test__getThreshold() public view {
+        assertEq(wallet.getThreshold(), TWO);
+    }
+
+    function test__getTransacionByTxId() public submitTransaction {
+        MultiSig.Transaction memory transaction = wallet.getTransactionByTxId(TX_ID);
+        assertEq(transaction.to, to);
+        assertEq(transaction.value, SUBMIT_VALUE);
+        assertEq(transaction.data, EMPTY_BYTES);
+        assertEq(transaction.executed, false);
+        assertEq(transaction.numConfirmations, ZERO);
+        assertEq(transaction.revoked, false);
+        assertEq(transaction.numRevokes, ZERO);
+        assertEq(transaction.createdAt, block.timestamp);
+        assertEq(transaction.endAt, ZERO);
+    }
+
+    function test__getResponsesByOwnerAndTxId()
+        public
+        submitTransaction
+        confirmTransaction(owners[ZERO], TX_ID)
+        revokeTransaction(owners[ONE], TX_ID)
+    {
+        assertEq(uint256(wallet.getResponsesByOwnerAndTxId(TX_ID, owners[ZERO])), ONE);
+        assertEq(uint256(wallet.getResponsesByOwnerAndTxId(TX_ID, owners[ONE])), TWO);
+    }
 }
